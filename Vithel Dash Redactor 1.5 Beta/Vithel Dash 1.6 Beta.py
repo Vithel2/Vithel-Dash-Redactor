@@ -35,7 +35,7 @@ TITLE = "Vithel Dash Redactor"
 AUTHOR = "Vithel"
 TIKTOK = "@vithel_tt"
 MADE_WITH = "Claude Opus 4.8"
-SERVER_URL = "https://vithel-dash-redactor.vercel.app"  # сервер аккаунтов
+SERVER_URL = "https://vithel-dash-redactor-3c.vercel.app"  # сервер аккаунтов
 
 GRAVITY = 0.9
 JUMP_FORCE = -14
@@ -1478,7 +1478,7 @@ def play():
                     offsets[a["id"]] = [a["ex"], a["ey"]]
                     st["anims"].remove(a)
 
-            # анимации Alpha-триггеров
+            # аним��ции Alpha-триггеров
             for a in st["aanims"][:]:
                 a["f"] += 1
                 p = ease(a["f"] / max(1, a["dur"]), "smooth")
@@ -1567,7 +1567,6 @@ def play():
                     continue
                 if t == "saw":
                     scx, scy = saw_center(o, ooff)
-                    scx -= 0  # мировые координаты
                     r_ = saw_radius(o) * 0.85
                     nx = max(pr.left, min(scx, pr.right))
                     ny = max(pr.top, min(scy, pr.bottom))
@@ -1799,7 +1798,7 @@ def play():
             pygame.draw.circle(ps, (color[0], color[1], color[2], a), (rad + 1, rad + 1), rad)
             screen.blit(ps, (p[0] - rad, p[1] - rad))
 
-        mode_ru = {"cube": "КУБ", "ship": "КОРАБЛИК", "wave": "ВОЛНА", "ufo": "НЛО"}[mode]
+        mode_ru = {"cube": "КУБ", "ship": "КОРАБЛИК", "wave": "ВОЛНА", "ufo": "НЛ��"}[mode]
         extra = ""
         if st["mini"]:
             extra += "   МИНИ"
