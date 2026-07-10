@@ -3,6 +3,8 @@ import json
 import os
 import math
 import array
+import urllib.request
+import urllib.error
 
 # --- звук ---
 sound_ok = False
@@ -22,25 +24,34 @@ WIDTH, HEIGHT = 1000, 600
 GRID = 40
 FPS = 60
 SPEED = 6
-LEVEL_FILE = "level.json"
+LEVEL_SLOTS = 5
+cur_slot = 1
+LEGACY_LEVEL_FILE = "level.json"
 CONFIG_FILE = "config.json"
 SOUND_DIR = "Звуки"
 AUDIO_EXTS = (".ogg", ".wav", ".mp3", ".flac")
-VERSION = "Beta 1.5"
+VERSION = "Beta 1.6"
 TITLE = "Vithel Dash Redactor"
 AUTHOR = "Vithel"
 TIKTOK = "@vithel_tt"
 MADE_WITH = "Claude Opus 4.8"
+SERVER_URL = "https://vithel-dash-redactor.vercel.app"  # сервер аккаунтов
 
 GRAVITY = 0.9
 JUMP_FORCE = -14
-SHIP_LIFT = 0.62
-SHIP_GRAV = 0.34
-SHIP_MAX_V = 8
+SHIP_LIFT = 0.5      # полегче: слабее тянет вверх
+SHIP_GRAV = 0.26     # и слабее тянет вниз
+SHIP_MAX_V = 6       # ограничение скорости — проще держать в воздухе
+SHIP_ENTER_CLAMP = 4 # при входе в портал корабля скорость обрезается
 UFO_GRAV = 0.5
 UFO_FLAP = -9.5
+MINI_SCALE = 0.62
 TRAIL_LIFE = 16
 DEATH_FRAMES = 30
+
+
+def level_file():
+    return f"level{cur_slot}.json"
 
 BG        = (30, 30, 40)
 GRID_COL  = (55, 55, 70)
@@ -69,12 +80,39 @@ COLOR_GROUPS = [
 ]
 
 SPEED_LEVELS = [
-    {"mult": 0.6, "col": (255, 150, 60),  "arrows": 1, "dir": -1},
-    {"mult": 1.0, "col": (90, 180, 255),  "arrows": 1, "dir": 1},
-    {"mult": 1.3, "col": (110, 230, 120), "arrows": 2, "dir": 1},
-    {"mult": 1.6, "col": (240, 110, 220), "arrows": 3, "dir": 1},
-    {"mult": 1.9, "col": (240, 70, 70),   "arrows": 4, "dir": 1},
+    {"mult": 0.75, "col": (255, 170, 40),  "arrows": 1, "dir": -1},
+    {"mult": 1.0,  "col": (60, 190, 255),  "arrows": 1, "dir": 1},
+    {"mult": 1.25, "col": (80, 220, 80),   "arrows": 2, "dir": 1},
+    {"mult": 1.5,  "col": (240, 120, 240), "arrows": 3, "dir": 1},
+    {"mult": 1.75, "col": (230, 50, 50),   "arrows": 4, "dir": 1},
 ]
+
+# --- сферы (orbs) ---
+ORB_TYPES = ["yellow", "pink", "cyan", "green", "red", "black"]
+ORB_COL = {
+    "yellow": (250, 225, 70),
+    "pink":   (245, 110, 205),
+    "cyan":   (85, 230, 245),
+    "green":  (95, 235, 110),
+    "red":    (245, 90, 45),
+    "black":  (35, 35, 42),
+}
+ORB_RU = {
+    "yellow": "Жёлтая", "pink": "Розовая", "cyan": "Голубая",
+    "green": "Зелёная", "red": "Красная", "black": "Чёрная",
+}
+
+# --- доп. порталы: гравитация и размер ---
+XPORTAL_COL = {
+    "p_gup":  (250, 215, 60),   # жёлтый — гравитация вверх
+    "p_gdn":  (100, 210, 250),  # голубой — обычная гравитация
+    "p_mini": (240, 105, 220),  # розовый — мини
+    "p_big":  (105, 230, 105),  # зелёный — обычный размер
+}
+XPORTAL_RU = {
+    "p_gup": "портал ГРАВИТАЦИЯ ВВЕРХ", "p_gdn": "портал ГРАВИТАЦИЯ ВНИЗ",
+    "p_mini": "портал МИНИ", "p_big": "портал ОБЫЧНЫЙ РАЗМЕР",
+}
 
 SKINS = [
     ("Cyan", (60, 200, 255)), ("Lime", (120, 240, 120)), ("Magenta", (240, 90, 220)),
@@ -236,9 +274,52 @@ def level_music_path():
     return None
 
 
-# --- конфиг (клавиши + музыка) ---
+def stop_music():
+    """Полная остановка музыки (например при смерти)."""
+    global _cur_music
+    if not sound_ok:
+        return
+    try:
+        pygame.mixer.music.stop()
+    except Exception:
+        pass
+    _cur_music = None
+
+
+def restart_level_music():
+    """Запуск музыки уровня заново с самого начала."""
+    global _cur_music
+    _cur_music = None
+    set_music(level_music_path())
+
+
+# --- аккаунт ---
+ACCOUNT = {"username": None, "token": None}
+
+
+def api_request(path, payload):
+    """POST-запрос к серверу аккаунтов. Возвращает (ok, data_or_error)."""
+    try:
+        body = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            SERVER_URL.rstrip("/") + path, data=body,
+            headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=6) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        return True, data
+    except urllib.error.HTTPError as e:
+        try:
+            data = json.loads(e.read().decode("utf-8"))
+            return False, data.get("error", f"Ошибка {e.code}")
+        except Exception:
+            return False, f"Ошибка сервера ({e.code})"
+    except Exception:
+        return False, "Нет связи с сервером"
+
+
+# --- конфиг (клавиши + музыка + слот + аккаунт) ---
 def load_config():
-    global sel_music_name
+    global sel_music_name, cur_slot
     try:
         with open(CONFIG_FILE) as f:
             d = json.load(f)
@@ -249,6 +330,13 @@ def load_config():
         m = d.get("music")
         if isinstance(m, str) or m is None:
             sel_music_name = m
+        s = d.get("slot")
+        if isinstance(s, int) and 1 <= s <= LEVEL_SLOTS:
+            cur_slot = s
+        acc = d.get("account")
+        if isinstance(acc, dict):
+            ACCOUNT["username"] = acc.get("username")
+            ACCOUNT["token"] = acc.get("token")
     except Exception:
         pass
 
@@ -256,25 +344,38 @@ def load_config():
 def save_config():
     try:
         with open(CONFIG_FILE, "w") as f:
-            json.dump({"controls": KEYBINDS, "music": sel_music_name}, f)
+            json.dump({"controls": KEYBINDS, "music": sel_music_name,
+                       "slot": cur_slot, "account": ACCOUNT}, f)
     except Exception:
         pass
 
 
 level = []
+# настройки уровня (стартовый режим и скорость при запуске)
+LEVEL_META = {"mode": "cube", "lvl": 1}
 
 PALETTE = [
     ("block", "1"), ("spike", "2"), ("slope", "3"), ("goal", "4"),
     ("p_cube", "5"), ("p_ship", "6"), ("p_wave", "7"), ("p_ufo", "8"),
-    ("speed", "9"), ("mtrig", "0"), ("startpos", "T"), ("hbox", "H"),
+    ("speed", "9"), ("orb", "O"), ("p_gup", "G"), ("p_gdn", "g"),
+    ("p_mini", "m"), ("p_big", "M"), ("saw", "П"), ("mtrig", "0"),
+    ("atrig", "A"), ("deco1", "Д1"), ("deco2", "Д2"),
+    ("startpos", "T"), ("hbox", "H"),
 ]
 BRUSH_NAMES = {
     "block": "блок", "spike": "шип", "slope": "склон", "goal": "финиш",
     "p_cube": "портал КУБ", "p_ship": "портал КОРАБЛЬ", "p_wave": "портал ВОЛНА",
     "p_ufo": "портал НЛО", "speed": "скорость", "mtrig": "Move-триггер",
     "startpos": "StartPos", "hbox": "H-блок",
+    "orb": "сфера", "saw": "пила", "atrig": "Alpha-триггер",
+    "deco1": "декор: кристалл", "deco2": "декор: растение",
+    "p_gup": XPORTAL_RU["p_gup"], "p_gdn": XPORTAL_RU["p_gdn"],
+    "p_mini": XPORTAL_RU["p_mini"], "p_big": XPORTAL_RU["p_big"],
+    "_lvlset": "Настройки уровня",
 }
-MOVABLE_TYPES = {"block", "spike", "slope", "hbox", "goal", "speed"} | set(P_COL)
+MOVABLE_TYPES = ({"block", "spike", "slope", "hbox", "goal", "speed",
+                  "orb", "saw", "deco1", "deco2"}
+                 | set(P_COL) | set(XPORTAL_COL))
 
 PAL_X0, PAL_Y0, TILE, GAP = 10, 50, 40, 6
 
@@ -294,9 +395,11 @@ def palette_bbox():
 
 # ---------------- Сохранение / загрузка ----------------
 def save_level():
-    with open(LEVEL_FILE, "w") as f:
-        json.dump(level, f)
-    print("Уровень сохранён")
+    data = {"objects": level, "music": sel_music_name,
+            "mode": LEVEL_META.get("mode", "cube"), "lvl": LEVEL_META.get("lvl", 1)}
+    with open(level_file(), "w") as f:
+        json.dump(data, f)
+    print(f"Уровень {cur_slot} сохранён")
 
 
 def normalize(o):
@@ -312,19 +415,61 @@ def normalize(o):
         o.setdefault("rot", "up")
     if o.get("t") == "slope":
         o.setdefault("rot", "right")
-    if o.get("t") in P_COL:
+    if o.get("t") in P_COL or o.get("t") in XPORTAL_COL:
         o.setdefault("rot", "vert")
+    if o.get("t") == "orb":
+        o.setdefault("kind", "yellow")
+    if o.get("t") == "saw":
+        o.setdefault("size", "big")
+    if o.get("t") == "atrig":
+        o.setdefault("dur", 30)
+        o.setdefault("op", 0)
     return o
 
 
 def load_level():
-    global level
-    if os.path.exists(LEVEL_FILE):
-        with open(LEVEL_FILE) as f:
-            level = [normalize(o) for o in json.load(f)]
-        print("Уровень загружен")
+    global level, sel_music_name
+    path = level_file()
+    # миграция старого level.json в слот 1
+    if not os.path.exists(path) and cur_slot == 1 and os.path.exists(LEGACY_LEVEL_FILE):
+        try:
+            os.rename(LEGACY_LEVEL_FILE, path)
+            print("Старый level.json перенесён в слот 1")
+        except Exception:
+            path = LEGACY_LEVEL_FILE
+    LEVEL_META["mode"] = "cube"
+    LEVEL_META["lvl"] = 1
+    if os.path.exists(path):
+        with open(path) as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            level = [normalize(o) for o in data.get("objects", [])]
+            m = data.get("music")
+            if isinstance(m, str) or m is None:
+                sel_music_name = m
+            if data.get("mode") in ("cube", "ship", "wave", "ufo"):
+                LEVEL_META["mode"] = data["mode"]
+            if isinstance(data.get("lvl"), int) and 0 <= data["lvl"] < len(SPEED_LEVELS):
+                LEVEL_META["lvl"] = data["lvl"]
+        else:
+            level = [normalize(o) for o in data]
+        print(f"Уровень {cur_slot} загружен")
     else:
-        print("Файл уровня не найден")
+        level = []
+        print(f"Слот {cur_slot}: пустой уровень")
+
+
+def slot_object_count(n):
+    """Количество объектов в слоте (для экрана выбора уровня)."""
+    p = f"level{n}.json"
+    if n == 1 and not os.path.exists(p) and os.path.exists(LEGACY_LEVEL_FILE):
+        p = LEGACY_LEVEL_FILE
+    try:
+        with open(p) as f:
+            data = json.load(f)
+        return len(data.get("objects", []) if isinstance(data, dict) else data)
+    except Exception:
+        return None
 
 
 # ---------------- Геометрия / цвета ----------------
@@ -382,7 +527,75 @@ def draw_chevrons(surf, cx, cy, n, direction, col):
         pygame.draw.lines(surf, col, False, pts, 3)
 
 
-def draw_object(surf, o, cam_x, editor_mode, off=(0, 0)):
+def saw_radius(o):
+    return int(GRID * 1.35) if o.get("size", "big") == "big" else int(GRID * 0.55)
+
+
+def saw_center(o, off=(0, 0)):
+    return (o["x"] * GRID + GRID // 2 + off[0], o["y"] * GRID + GRID // 2 + off[1])
+
+
+def draw_saw(surf, cx, cy, r, col, angle):
+    """Вращающаяся пила: зубья + корпус + отверстие."""
+    teeth = 10
+    pts = []
+    for i in range(teeth * 2):
+        a = angle + (i / (teeth * 2)) * 2 * math.pi
+        rad = r if i % 2 == 0 else r * 0.72
+        pts.append((cx + math.cos(a) * rad, cy + math.sin(a) * rad))
+    pygame.draw.polygon(surf, col, pts)
+    pygame.draw.polygon(surf, (255, 255, 255), pts, 2)
+    pygame.draw.circle(surf, (255, 255, 255), (int(cx), int(cy)), max(3, int(r * 0.22)), 2)
+
+
+def draw_orb(surf, cx, cy, kind, r=None):
+    r = r or GRID // 2 - 4
+    col = ORB_COL.get(kind, (250, 225, 70))
+    pygame.draw.circle(surf, (255, 255, 255), (cx, cy), r + 4, 2)
+    pygame.draw.circle(surf, col, (cx, cy), r)
+    hl = max(2, r // 3)
+    pygame.draw.circle(surf, (255, 255, 255), (cx - r // 3, cy - r // 3), hl)
+    if kind == "green":
+        pygame.draw.circle(surf, (255, 255, 255), (cx, cy), max(2, r // 2), 2)
+
+
+def draw_deco(surf, kind, x, y, col):
+    cx = x + GRID // 2
+    if kind == "deco1":  # кристалл
+        c = col or (120, 210, 250)
+        pts = [(cx, y + 4), (x + GRID - 6, y + GRID // 2), (cx, y + GRID - 2), (x + 6, y + GRID // 2)]
+        pygame.draw.polygon(surf, c, pts)
+        pygame.draw.polygon(surf, (255, 255, 255), pts, 2)
+        pygame.draw.line(surf, (255, 255, 255), (cx, y + 8), (x + GRID - 12, y + GRID // 2), 1)
+    else:  # растение
+        c = col or (95, 220, 110)
+        pygame.draw.line(surf, c, (cx, y + GRID - 2), (cx, y + 10), 3)
+        pygame.draw.polygon(surf, c, [(cx, y + 14), (cx - 12, y + GRID - 6), (cx - 2, y + GRID - 2)])
+        pygame.draw.polygon(surf, c, [(cx, y + 14), (cx + 12, y + GRID - 6), (cx + 2, y + GRID - 2)])
+        pygame.draw.circle(surf, (255, 255, 255), (cx, y + 9), 3)
+
+
+def draw_object(surf, o, cam_x, editor_mode, off=(0, 0), alpha=255):
+    """Обёртка с поддержкой прозрачности (Alpha-триггер)."""
+    if alpha >= 250:
+        return _draw_object(surf, o, cam_x, editor_mode, off)
+    if alpha <= 4:
+        return
+    sx = o["x"] * GRID - cam_x + off[0]
+    sy = o["y"] * GRID + off[1]
+    if sx < -GRID * 3 or sx > WIDTH + GRID * 2:
+        return
+    pad = GRID * 2
+    temp = pygame.Surface((GRID * 5, GRID * 5), pygame.SRCALPHA)
+    # рисуем объект в локальных координатах (pad, pad)
+    fake_cam = o["x"] * GRID + off[0] - pad
+    fake_off = (off[0], off[1] - sy + pad)
+    _draw_object(temp, o, fake_cam, editor_mode, fake_off)
+    temp.set_alpha(alpha)
+    surf.blit(temp, (sx - pad, sy - pad))
+
+
+def _draw_object(surf, o, cam_x, editor_mode, off=(0, 0)):
     kind = o["t"]
     x = o["x"] * GRID - cam_x + off[0]
     y = o["y"] * GRID + off[1]
@@ -429,6 +642,47 @@ def draw_object(surf, o, cam_x, editor_mode, off=(0, 0)):
         draw_chevrons(surf, x + GRID // 2, y + GRID // 2, lvl["arrows"], lvl["dir"], (255, 255, 255))
         if editor_mode and o.get("grp", 0):
             surf.blit(tiny_font.render(str(o["grp"]), True, (255, 255, 255)), (x + 10, y - GRID + 6))
+    elif kind in XPORTAL_COL:
+        col = XPORTAL_COL[kind]
+        if o.get("rot") == "horiz":
+            rect = pygame.Rect(x - GRID // 2, y + 10, GRID * 2, GRID - 20)
+        else:
+            rect = pygame.Rect(x + 10, y - GRID, GRID - 20, GRID * 2)
+        pygame.draw.rect(surf, col, rect, border_radius=12)
+        pygame.draw.rect(surf, (255, 255, 255), rect, 2, border_radius=12)
+        # стрелка-указатель
+        cx2, cy2 = rect.centerx, rect.centery
+        if kind == "p_gup":
+            pygame.draw.polygon(surf, (30, 30, 40), [(cx2 - 6, cy2 + 5), (cx2, cy2 - 6), (cx2 + 6, cy2 + 5)])
+        elif kind == "p_gdn":
+            pygame.draw.polygon(surf, (30, 30, 40), [(cx2 - 6, cy2 - 5), (cx2, cy2 + 6), (cx2 + 6, cy2 - 5)])
+        elif kind == "p_mini":
+            pygame.draw.rect(surf, (30, 30, 40), (cx2 - 4, cy2 - 4, 8, 8), 2)
+        else:
+            pygame.draw.rect(surf, (30, 30, 40), (cx2 - 7, cy2 - 7, 14, 14), 2)
+        if editor_mode and o.get("grp", 0):
+            surf.blit(tiny_font.render(str(o["grp"]), True, (255, 255, 255)), (rect.x + 3, rect.y + 2))
+    elif kind == "orb":
+        draw_orb(surf, x + GRID // 2, y + GRID // 2, o.get("kind", "yellow"))
+        if editor_mode and o.get("grp", 0):
+            surf.blit(tiny_font.render(str(o["grp"]), True, (255, 255, 255)), (x + 3, y + 3))
+    elif kind == "saw":
+        ang = pygame.time.get_ticks() * 0.004
+        draw_saw(surf, x + GRID // 2, y + GRID // 2, saw_radius(o),
+                 obj_color(o, (150, 160, 180)), ang)
+        if editor_mode and o.get("grp", 0):
+            surf.blit(tiny_font.render(str(o["grp"]), True, (255, 255, 255)), (x + 3, y + 3))
+    elif kind in ("deco1", "deco2"):
+        draw_deco(surf, kind, x, y, obj_color(o, None))
+        if editor_mode and o.get("grp", 0):
+            surf.blit(tiny_font.render(str(o["grp"]), True, (255, 255, 255)), (x + 3, y + 3))
+    elif kind == "atrig":
+        if editor_mode:
+            pygame.draw.line(surf, (90, 220, 240), (x + GRID // 2, 0), (x + GRID // 2, HEIGHT), 1)
+            pygame.draw.circle(surf, (80, 230, 245), (x + GRID // 2, y + GRID // 2), GRID // 2 - 2)
+            pygame.draw.circle(surf, (20, 20, 30), (x + GRID // 2, y + GRID // 2), GRID // 2 - 2, 3)
+            t = small_font.render("A" + str(o.get("grp", 0)), True, (20, 20, 30))
+            surf.blit(t, t.get_rect(center=(x + GRID // 2, y + GRID // 2)))
     elif kind == "mtrig":
         if editor_mode:
             pygame.draw.line(surf, LINE_C, (x + GRID // 2, 0), (x + GRID // 2, HEIGHT), 1)
@@ -473,6 +727,18 @@ def draw_palette_icon(surf, kind, r):
     elif kind == "mtrig":
         pygame.draw.circle(surf, (240, 90, 200), (cx, cy), 11)
         pygame.draw.circle(surf, (255, 255, 255), (cx, cy), 11, 2)
+    elif kind == "atrig":
+        pygame.draw.circle(surf, (80, 230, 245), (cx, cy), 11)
+        pygame.draw.circle(surf, (20, 20, 30), (cx, cy), 11, 3)
+    elif kind == "orb":
+        draw_orb(surf, cx, cy, "yellow", r=9)
+    elif kind == "saw":
+        draw_saw(surf, cx, cy, 13, (150, 160, 180), 0.4)
+    elif kind in XPORTAL_COL:
+        pygame.draw.rect(surf, XPORTAL_COL[kind], (x + 12, y + 5, g - 24, g - 10), border_radius=8)
+        pygame.draw.rect(surf, (255, 255, 255), (x + 12, y + 5, g - 24, g - 10), 1, border_radius=8)
+    elif kind in ("deco1", "deco2"):
+        draw_deco(surf, kind, x, y, None)
     elif kind == "startpos":
         pygame.draw.rect(surf, (90, 240, 120), (x + 8, y + 8, g - 16, g - 16), 2)
         surf.blit(tiny_font.render("St", True, (90, 240, 120)),
@@ -546,6 +812,41 @@ def get_spec(o):
         return [
             {"key": "mode", "label": "Стартовый режим", "kind": "cycle", "values": ["cube", "ship", "wave", "ufo"]},
             {"key": "lvl", "label": "Стартовая скорость", "kind": "index", "names": speed_names},
+        ]
+    if t in XPORTAL_COL:
+        return [
+            {"key": "rot", "label": "Ориентация", "kind": "cycle", "values": ["vert", "horiz"]},
+            grp_field,
+        ]
+    if t == "orb":
+        return [
+            {"key": "kind", "label": "Тип сферы", "kind": "cycle",
+             "values": ORB_TYPES, "ru": ORB_RU},
+            grp_field,
+        ]
+    if t == "saw":
+        return [
+            {"key": "size", "label": "Размер", "kind": "cycle",
+             "values": ["big", "small"], "ru": {"big": "Большая", "small": "Маленькая"}},
+            {"key": "c", "label": "Цвет", "kind": "index", "names": [n for n, _ in COLOR_GROUPS]},
+            grp_field,
+        ]
+    if t == "atrig":
+        return [
+            {"key": "grp", "label": "Группа", "kind": "int", "min": 1, "max": 999, "step": 1},
+            {"key": "op", "label": "Непрозрачность (%)", "kind": "int", "min": 0, "max": 100, "step": 10},
+            {"key": "dur", "label": "Длительность (кадры)", "kind": "int", "min": 0, "max": 180, "step": 5},
+        ]
+    if t in ("deco1", "deco2"):
+        return [
+            {"key": "c", "label": "Цвет", "kind": "index", "names": [n for n, _ in COLOR_GROUPS]},
+            grp_field,
+        ]
+    if t == "_lvlset":
+        return [
+            {"key": "mode", "label": "Режим при старте уровня", "kind": "cycle",
+             "values": ["cube", "ship", "wave", "ufo"]},
+            {"key": "lvl", "label": "Скорость при старте", "kind": "index", "names": speed_names},
         ]
     return []
 
@@ -803,6 +1104,8 @@ def editor():
     cur_color = 0
     cur_group = 0
     cur_speed = 1
+    cur_orb = 0
+    cur_saw = "big"
     cur_start_mode = "cube"
     cur_rot = {"spike": "up", "slope": "right", "portal": "vert"}
 
@@ -818,7 +1121,7 @@ def editor():
             return cur_rot["spike"]
         if kind == "slope":
             return cur_rot["slope"]
-        if kind in P_COL:
+        if kind in P_COL or kind in XPORTAL_COL:
             return cur_rot["portal"]
         return None
 
@@ -846,9 +1149,13 @@ def editor():
             if w and kind is not None:
                 if kind in ("speed", "startpos"):
                     cur_speed = (cur_speed + w) % len(SPEED_LEVELS)
-                elif kind in ("block", "spike", "slope"):
+                elif kind == "orb":
+                    cur_orb = (cur_orb + w) % len(ORB_TYPES)
+                elif kind == "saw":
+                    cur_saw = "small" if cur_saw == "big" else "big"
+                elif kind in ("block", "spike", "slope", "deco1", "deco2"):
                     cur_color = (cur_color + w) % len(COLOR_GROUPS)
-                elif kind == "mtrig" or kind in P_COL:
+                elif kind in ("mtrig", "atrig") or kind in P_COL or kind in XPORTAL_COL:
                     cur_group = max(0, min(999, cur_group + w))
                 else:
                     bi = (bi + w) % len(PALETTE)
@@ -876,6 +1183,14 @@ def editor():
                 if e.key == pygame.K_u:
                     if music_screen(cam_x) == "quit":
                         pygame.quit(); return "quit"
+                if e.key == pygame.K_n:
+                    # настройки уровня: стартовый режим и скорость
+                    ls = {"t": "_lvlset", "mode": LEVEL_META.get("mode", "cube"),
+                          "lvl": LEVEL_META.get("lvl", 1)}
+                    if edit_object_settings(ls, cam_x) == "quit":
+                        pygame.quit(); return "quit"
+                    LEVEL_META["mode"] = ls["mode"]
+                    LEVEL_META["lvl"] = ls["lvl"]
                 if e.key == pygame.K_r:
                     # поворот: объект под курсором ИЛИ кисть (до постановки)
                     obj = next((o for o in level if o["x"] == gx and o["y"] == gy
@@ -891,7 +1206,7 @@ def editor():
                         elif kind == "slope":
                             vals = ["right", "left", "tright", "tleft"]
                             cur_rot["slope"] = vals[(vals.index(cur_rot["slope"]) + 1) % 4]
-                        elif kind in P_COL:
+                        elif kind in P_COL or kind in XPORTAL_COL:
                             cur_rot["portal"] = "horiz" if cur_rot["portal"] == "vert" else "vert"
                 if e.key == pygame.K_e:
                     cands = [o for o in level if o["x"] == gx and o["y"] == gy and get_spec(o)]
