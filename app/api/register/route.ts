@@ -1,8 +1,6 @@
 import { neon } from "@neondatabase/serverless"
 import { scryptSync, randomBytes } from "crypto"
 
-const sql = neon(process.env.DATABASE_URL!)
-
 function hashPassword(password: string): string {
   const salt = randomBytes(16).toString("hex")
   const hash = scryptSync(password, salt, 64).toString("hex")
@@ -11,6 +9,7 @@ function hashPassword(password: string): string {
 
 export async function POST(req: Request) {
   try {
+    const sql = neon(process.env.DATABASE_URL!)
     const body = await req.json()
     const username = String(body.username ?? "").trim()
     const password = String(body.password ?? "")
