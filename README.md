@@ -1,3 +1,4 @@
+<img width="1001" height="628" alt="5370550682177444274" src="https://github.com/user-attachments/assets/24fbf5da-6474-40ea-bfdd-8b9f6a458e01" />
 📑 Vithel Dash Redactor
 Добро пожаловать в Vithel Dash Redactor (Версия Beta 1.5)! Это фанатский 2D-платформер с полноценным встроенным редактором уровней, вдохновленный Geometry Dash.
 
