@@ -25,6 +25,9 @@ SPEED = 6
 LEVEL_FILE = "level.json"
 VERSION = "Beta 1.4"
 TITLE = "Vithel Dash Redactor"
+AUTHOR = "Vithel"
+TIKTOK = "@vithel_tt"
+MADE_WITH = "Claude Opus 4.8"
 
 GRAVITY = 0.9
 JUMP_FORCE = -14
@@ -42,7 +45,7 @@ GOAL_C    = (100, 240, 120)
 TEXT_C    = (230, 230, 230)
 HBOX_C    = (200, 220, 255)
 LINE_C    = (80, 240, 120)
-SEL_C     = (80, 240, 120)   # зелёный контур выбранной плашки
+SEL_C     = (80, 240, 120)
 
 P_COL = {
     "p_cube": (120, 200, 255),
@@ -60,7 +63,6 @@ COLOR_GROUPS = [
     ("White", (240, 240, 245)),
 ]
 
-# Скорости — верхние немного снижены (было 1.5 / 2.0 / 2.5)
 SPEED_LEVELS = [
     {"mult": 0.6, "col": (255, 150, 60),  "arrows": 1, "dir": -1},
     {"mult": 1.0, "col": (90, 180, 255),  "arrows": 1, "dir": 1},
@@ -135,7 +137,6 @@ build_sounds()
 
 level = []
 
-# Палитра: (тип, подпись-клавиша)
 PALETTE = [
     ("block", "1"), ("spike", "2"), ("slope", "3"), ("goal", "4"),
     ("p_cube", "5"), ("p_ship", "6"), ("p_wave", "7"), ("p_ufo", "8"),
@@ -147,10 +148,8 @@ BRUSH_NAMES = {
     "p_ufo": "портал НЛО", "speed": "скорость", "mtrig": "Move-триггер",
     "startpos": "StartPos", "hbox": "H-блок",
 }
-# что двигает Move-триггер
 MOVABLE_TYPES = {"block", "spike", "slope", "hbox", "goal", "speed"} | set(P_COL)
 
-# геометрия палитры
 PAL_X0, PAL_Y0, TILE, GAP = 10, 50, 40, 6
 
 
@@ -187,6 +186,8 @@ def normalize(o):
         o.setdefault("rot", "up")
     if o.get("t") == "slope":
         o.setdefault("rot", "right")
+    if o.get("t") in P_COL:
+        o.setdefault("rot", "vert")
     return o
 
 
@@ -205,8 +206,12 @@ def rect_of(o, off=(0, 0)):
     return pygame.Rect(o["x"] * GRID + off[0], o["y"] * GRID + off[1], GRID, GRID)
 
 
-def portal_rect(o):
-    return pygame.Rect(o["x"] * GRID, o["y"] * GRID - GRID, GRID, GRID * 2)
+def portal_rect(o, off=(0, 0)):
+    x = o["x"] * GRID + off[0]
+    y = o["y"] * GRID + off[1]
+    if o.get("rot") == "horiz":
+        return pygame.Rect(x - GRID // 2, y, GRID * 2, GRID)
+    return pygame.Rect(x, y - GRID, GRID, GRID * 2)
 
 
 def obj_color(o, default):
@@ -230,11 +235,17 @@ def rot_pts(pts, cx, cy, k):
 
 
 def slope_pts(x, y, d):
-    # d == "right": подъём слева-направо (пик справа-сверху)
-    # d == "left" : подъём справа-налево (пик слева-сверху)
+    # right  — подъём вправо (пол)
+    # left   — подъём влево  (пол)
+    # tright — перевёрнутый вправо (потолок)
+    # tleft  — перевёрнутый влево  (потолок)
     if d == "left":
         return [(x, y + GRID), (x + GRID, y + GRID), (x, y)]
-    return [(x, y + GRID), (x + GRID, y + GRID), (x + GRID, y)]
+    if d == "tright":
+        return [(x, y), (x + GRID, y), (x + GRID, y + GRID)]
+    if d == "tleft":
+        return [(x, y), (x + GRID, y), (x, y + GRID)]
+    return [(x, y + GRID), (x + GRID, y + GRID), (x + GRID, y)]  # right
 
 
 def draw_chevrons(surf, cx, cy, n, direction, col):
@@ -269,8 +280,9 @@ def draw_object(surf, o, cam_x, editor_mode, off=(0, 0)):
             surf.blit(tiny_font.render(str(o["grp"]), True, (255, 255, 255)),
                       (x + GRID // 2 - 5, y + GRID - 16))
     elif kind == "slope":
-        pygame.draw.polygon(surf, obj_color(o, BLOCK_C), slope_pts(x, y, o.get("rot", "right")))
-        pygame.draw.polygon(surf, (60, 60, 70), slope_pts(x, y, o.get("rot", "right")), 2)
+        d = o.get("rot", "right")
+        pygame.draw.polygon(surf, obj_color(o, BLOCK_C), slope_pts(x, y, d))
+        pygame.draw.polygon(surf, (60, 60, 70), slope_pts(x, y, d), 2)
         if editor_mode and o.get("grp", 0):
             surf.blit(tiny_font.render(str(o["grp"]), True, (20, 20, 30)), (x + 3, y + GRID - 16))
     elif kind == "goal":
@@ -278,17 +290,24 @@ def draw_object(surf, o, cam_x, editor_mode, off=(0, 0)):
         pygame.draw.rect(surf, (255, 255, 255), (x, y, GRID, GRID), 3)
     elif kind in P_COL:
         col = P_COL[kind]
-        pygame.draw.rect(surf, col, (x + 6, y - GRID, GRID - 12, GRID * 2), border_radius=10)
-        pygame.draw.rect(surf, (255, 255, 255), (x + 6, y - GRID, GRID - 12, GRID * 2), 2, border_radius=10)
+        if o.get("rot") == "horiz":
+            rect = pygame.Rect(x - GRID // 2, y + 6, GRID * 2, GRID - 12)
+        else:
+            rect = pygame.Rect(x + 6, y - GRID, GRID - 12, GRID * 2)
+        pygame.draw.rect(surf, col, rect, border_radius=10)
+        pygame.draw.rect(surf, (255, 255, 255), rect, 2, border_radius=10)
         t = font.render(P_LETTER[kind], True, (20, 20, 30))
         surf.blit(t, t.get_rect(center=(x + GRID // 2, y + GRID // 2)))
         if editor_mode and o.get("grp", 0):
-            surf.blit(tiny_font.render(str(o["grp"]), True, (255, 255, 255)), (x + 8, y - GRID + 2))
+            surf.blit(tiny_font.render(str(o["grp"]), True, (255, 255, 255)),
+                      (rect.x + 3, rect.y + 2))
     elif kind == "speed":
         lvl = SPEED_LEVELS[o.get("lvl", 1)]
         pygame.draw.rect(surf, lvl["col"], (x + 8, y - GRID + 4, GRID - 16, GRID * 2 - 8), border_radius=8)
         pygame.draw.rect(surf, (255, 255, 255), (x + 8, y - GRID + 4, GRID - 16, GRID * 2 - 8), 2, border_radius=8)
         draw_chevrons(surf, x + GRID // 2, y + GRID // 2, lvl["arrows"], lvl["dir"], (255, 255, 255))
+        if editor_mode and o.get("grp", 0):
+            surf.blit(tiny_font.render(str(o["grp"]), True, (255, 255, 255)), (x + 10, y - GRID + 6))
     elif kind == "mtrig":
         if editor_mode:
             pygame.draw.line(surf, LINE_C, (x + GRID // 2, 0), (x + GRID // 2, HEIGHT), 1)
@@ -309,7 +328,7 @@ def draw_object(surf, o, cam_x, editor_mode, off=(0, 0)):
                 pygame.draw.rect(surf, HBOX_C, (cx, cy, s, s))
 
 
-# ---------------- Иконки палитры ----------------
+# ---------------- Иконки палитры / справочника ----------------
 def draw_palette_icon(surf, kind, r):
     x, y, g = r.x, r.y, TILE
     cx, cy = r.centerx, r.centery
@@ -353,7 +372,6 @@ def draw_palette(bi):
             pygame.draw.rect(screen, SEL_C, r, 3, border_radius=7)
         else:
             pygame.draw.rect(screen, (72, 72, 92), r, 1, border_radius=7)
-        # цифра/буква в левом верхнем углу
         badge = micro_font.render(lab, True, (255, 255, 255))
         bx, by = r.x + 2, r.y + 1
         pygame.draw.rect(screen, (20, 20, 28), (bx, by, badge.get_width() + 4, 14))
@@ -379,13 +397,16 @@ def get_spec(o):
     if t == "slope":
         return [
             {"key": "c", "label": "Цвет", "kind": "index", "names": [n for n, _ in COLOR_GROUPS]},
-            {"key": "rot", "label": "Направление", "kind": "cycle", "values": ["right", "left"]},
+            {"key": "rot", "label": "Поворот", "kind": "cycle", "values": ["right", "left", "tright", "tleft"]},
             grp_field,
         ]
     if t == "goal":
         return [grp_field]
     if t in P_COL:
-        return [grp_field]
+        return [
+            {"key": "rot", "label": "Ориентация", "kind": "cycle", "values": ["vert", "horiz"]},
+            grp_field,
+        ]
     if t == "mtrig":
         return [
             {"key": "grp", "label": "Группа", "kind": "int", "min": 1, "max": 999, "step": 1},
@@ -438,8 +459,6 @@ def field_adjust(o, f, d):
 
 
 def wheel_delta(e):
-    # ТОЛЬКО MOUSEWHEEL — раньше ловили ещё и button 4/5,
-    # из-за чего значение прыгало через одно (0-2-4-6-8)
     if e.type == pygame.MOUSEWHEEL:
         return e.y
     return 0
@@ -531,7 +550,6 @@ def confirm_dialog(text, cam_x):
         pygame.display.flip()
 
 
-# ---------------- HUD-плашки редактора ----------------
 def draw_pill(x, y, label, value, accent):
     lab = tiny_font.render(label, True, (150, 150, 165))
     val = small_font.render(value, True, accent)
@@ -546,7 +564,7 @@ def draw_pill(x, y, label, value, accent):
 # ---------------- Редактор ----------------
 def editor():
     cam_x = 0
-    bi = 0            # индекс палитры, либо None = ничего не выбрано
+    bi = 0
     cur_color = 0
     cur_group = 0
     cur_speed = 1
@@ -574,7 +592,7 @@ def editor():
             if e.type == pygame.MOUSEBUTTONDOWN and e.button == 1 and over_pal:
                 for r, k, lab, i in palette_rects():
                     if r.collidepoint(mx, my):
-                        bi = None if bi == i else i   # повторный клик снимает выбор
+                        bi = None if bi == i else i
                         snd("click")
                         break
 
@@ -597,9 +615,9 @@ def editor():
                 if e.key == pygame.K_RIGHTBRACKET:
                     cur_color = (cur_color + 1) % len(COLOR_GROUPS)
                 if e.key == pygame.K_MINUS:
-                    cur_group = (cur_group - 1) % 1000
+                    cur_group = max(0, cur_group - 1)       # без закольцовки → не прыгает на 999
                 if e.key == pygame.K_EQUALS:
-                    cur_group = (cur_group + 1) % 1000
+                    cur_group = min(999, cur_group + 1)
                 if e.key == pygame.K_COMMA:
                     cur_speed = (cur_speed - 1) % len(SPEED_LEVELS)
                 if e.key == pygame.K_PERIOD:
@@ -608,7 +626,6 @@ def editor():
                     order = ["cube", "ship", "wave", "ufo"]
                     cur_start_mode = order[(order.index(cur_start_mode) + 1) % len(order)]
                 if e.key == pygame.K_r:
-                    # быстрый поворот объекта под курсором
                     for o in level:
                         if o["x"] == gx and o["y"] == gy:
                             sp = get_spec(o)
@@ -654,6 +671,8 @@ def editor():
                     obj["rot"] = "up"
                 if kind == "slope":
                     obj["rot"] = "right"
+                if kind in P_COL:
+                    obj["rot"] = "vert"
                 if kind == "mtrig":
                     obj.update({"dx": 0, "dy": -3, "dur": 30, "easing": "smooth"})
                 level.append(obj)
@@ -672,20 +691,18 @@ def editor():
             draw_object(screen, o, cam_x, editor_mode=True)
 
         if kind is not None and not over_pal:
+            prot = "up" if kind == "spike" else ("vert" if kind in P_COL else "right")
             preview = {"x": gx, "y": gy, "t": kind, "c": cur_color, "grp": cur_group,
-                       "lvl": cur_speed, "mode": cur_start_mode,
-                       "rot": "up" if kind == "spike" else "right"}
+                       "lvl": cur_speed, "mode": cur_start_mode, "rot": prot}
             draw_object(screen, preview, cam_x, editor_mode=True)
             pygame.draw.rect(screen, (255, 255, 0), (gx * GRID - cam_x, gy * GRID, GRID, GRID), 2)
 
-        # верхние подписи + палитра
         screen.blit(small_font.render(f"{TITLE}   {VERSION}   —   РЕДАКТОР", True, TEXT_C), (10, 8))
         screen.blit(tiny_font.render(
             "ЛКМ ставить · ПКМ удалять · A/D камера · E настройки · R повернуть · S сохр · L загр · C стереть · P играть · ESC",
             True, (170, 170, 185)), (10, 28))
         draw_palette(bi)
 
-        # нижние плашки
         if kind is None:
             draw_pill(10, HEIGHT - 50, "Кисть", "не выбрана", (200, 200, 205))
         else:
@@ -697,9 +714,13 @@ def editor():
                 pills.append(("Группа - =", str(cur_group), (240, 110, 200)))
             if kind in ("spike", "slope"):
                 pills.append(("Поворот", "R или E", (255, 220, 120)))
+            if kind in P_COL:
+                pills.append(("Группа - =", str(cur_group), (240, 110, 200)))
+                pills.append(("Ориентация", "R или E", (255, 220, 120)))
             if kind == "speed":
                 pills.append(("Скорость , . / колесо", "x" + str(SPEED_LEVELS[cur_speed]["mult"]),
                               SPEED_LEVELS[cur_speed]["col"]))
+                pills.append(("Группа - =", str(cur_group), (240, 110, 200)))
             if kind == "mtrig":
                 pills.append(("Группа - =", str(cur_group), (240, 110, 200)))
                 pills.append(("Настрой", "жми E на нём", (255, 220, 120)))
@@ -823,12 +844,13 @@ def play():
             st["ground_slope"] = None
             for o in level:
                 t = o["t"]
+                ooff = offsets.get(id(o), (0, 0))
                 if t in P_COL:
-                    if pr.colliderect(portal_rect(o)):
+                    if pr.colliderect(portal_rect(o, ooff)):     # зона теперь едет за порталом
                         mode = P_MODE[t]; st["mode"] = mode
                     continue
                 if t == "speed":
-                    if pr.colliderect(portal_rect(o)):
+                    if pr.colliderect(portal_rect(o, ooff)):
                         st["mult"] = SPEED_LEVELS[o.get("lvl", 1)]["mult"]
                     continue
                 if t == "mtrig":
@@ -848,25 +870,35 @@ def play():
                                         "ey": base[1] + o.get("dy", 0) * GRID})
                     continue
                 if t == "slope":
-                    off = offsets.get(id(o), (0, 0))
-                    left = o["x"] * GRID + off[0]
-                    bottom = (o["y"] + 1) * GRID + off[1]
                     d = o.get("rot", "right")
-                    cxp = world_x + size / 2
-                    lx = cxp - left
-                    if 0 <= lx <= GRID and mode in ("cube", "ship", "ufo"):
-                        surf_y = bottom - lx if d == "right" else bottom - (GRID - lx)
-                        if py + size > surf_y and prev_bottom <= bottom + GRID:
-                            py = surf_y - size
-                            vy = 0
-                            st["on_ground"] = True
-                            st["ground_slope"] = d
-                            pr.y = int(py)
+                    if d in ("right", "left"):
+                        left = o["x"] * GRID + ooff[0]
+                        bottom = (o["y"] + 1) * GRID + ooff[1]
+                        cxp = world_x + size / 2
+                        lx = cxp - left
+                        if 0 <= lx <= GRID and mode in ("cube", "ship", "ufo"):
+                            surf_y = bottom - lx if d == "right" else bottom - (GRID - lx)
+                            if py + size > surf_y and prev_bottom <= bottom + GRID:
+                                py = surf_y - size; vy = 0
+                                st["on_ground"] = True
+                                st["ground_slope"] = d
+                                pr.y = int(py)
+                    else:  # перевёрнутый склон = сплошной блок
+                        r = rect_of(o, ooff)
+                        if pr.colliderect(r):
+                            if mode == "wave":
+                                st["dead"] = True
+                            elif was_falling and prev_bottom <= r.top + TOL:
+                                py = r.top - size; vy = 0; st["on_ground"] = True; pr.y = int(py)
+                            elif (not was_falling) and prev_top >= r.bottom - TOL:
+                                py = r.bottom; vy = 0; pr.y = int(py)
+                            else:
+                                st["dead"] = True
                     continue
                 if t in ("startpos", "hbox"):
                     continue
 
-                r = rect_of(o, offsets.get(id(o), (0, 0)))
+                r = rect_of(o, ooff)
                 if not pr.colliderect(r):
                     continue
 
@@ -912,14 +944,11 @@ def play():
                 if vy < 0:
                     vy = 0
 
-            # ПРЫЖОК — ПОСЛЕ определения земли (включая пол).
-            # Из-за того что раньше он был до floor-check, куб на голом полу не прыгал.
             if mode == "cube" and hold and st["on_ground"]:
                 vy = JUMP_FORCE
                 st["spin"] = -12.0
                 snd("jump")
 
-            # вращение куба в прыжке
             if mode == "cube":
                 if st["on_ground"] and vy >= 0:
                     st["cube_rot"] = 0.0
@@ -987,6 +1016,57 @@ def play():
         pygame.display.flip()
 
 
+# ---------------- Справочник ----------------
+def help_screen():
+    while True:
+        clock.tick(FPS)
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                return "quit"
+            if e.type == pygame.KEYDOWN:
+                if e.key in (pygame.K_ESCAPE, pygame.K_i, pygame.K_RETURN):
+                    return "menu"
+
+        screen.fill(BG)
+        title = big_font.render("СПРАВОЧНИК", True, SKINS[skin_index][1])
+        screen.blit(title, title.get_rect(center=(WIDTH // 2, 46)))
+
+        # авторство
+        credits = [
+            (f"Игру сделал: {AUTHOR}", (255, 230, 120)),
+            (f"Версия: {VERSION}", TEXT_C),
+            (f"Создано при помощи нейросети: {MADE_WITH}", (150, 200, 255)),
+            (f"TikTok: {TIKTOK}", (240, 110, 200)),
+        ]
+        yy = 92
+        for txt, col in credits:
+            screen.blit(font.render(txt, True, col), (60, yy))
+            yy += 30
+
+        pygame.draw.line(screen, (70, 70, 90), (60, yy + 6), (WIDTH - 60, yy + 6), 1)
+        screen.blit(small_font.render("Блоки редактора:", True, TEXT_C), (60, yy + 16))
+
+        # список блоков в 2 колонки: иконка + подпись
+        start_y = yy + 44
+        col_x = [70, 540]
+        per_col = (len(PALETTE) + 1) // 2
+        for idx, (k, lab) in enumerate(PALETTE):
+            col = idx // per_col
+            row = idx % per_col
+            ix = col_x[col]
+            iy = start_y + row * 46
+            r = pygame.Rect(ix, iy, TILE, TILE)
+            pygame.draw.rect(screen, (44, 44, 58), r, border_radius=7)
+            draw_palette_icon(screen, k, r)
+            pygame.draw.rect(screen, (72, 72, 92), r, 1, border_radius=7)
+            screen.blit(small_font.render(f"{lab} — {BRUSH_NAMES[k]}", True, (210, 210, 220)),
+                        (ix + TILE + 12, iy + 11))
+
+        screen.blit(tiny_font.render("ESC / I / Enter — назад в меню", True, (160, 160, 175)),
+                    (60, HEIGHT - 30))
+        pygame.display.flip()
+
+
 # ---------------- Меню ----------------
 def menu():
     global skin_index
@@ -999,6 +1079,7 @@ def menu():
                 if e.key == pygame.K_e: return "editor"
                 if e.key == pygame.K_p:
                     load_level(); return "play"
+                if e.key == pygame.K_i: return "help"
                 if e.key == pygame.K_a:
                     skin_index = (skin_index - 1) % len(SKINS)
                 if e.key == pygame.K_d:
@@ -1007,16 +1088,20 @@ def menu():
 
         screen.fill(BG)
         title = big_font.render("VITHEL DASH REDACTOR", True, SKINS[skin_index][1])
-        screen.blit(title, title.get_rect(center=(WIDTH // 2, 120)))
+        screen.blit(title, title.get_rect(center=(WIDTH // 2, 110)))
         screen.blit(small_font.render(VERSION + ("  ♪" if sound_ok else "  (без звука)"), True, TEXT_C),
-                    (WIDTH // 2 - 40, 158))
-        for i, t in enumerate(["E — Редактор уровней", "P — Играть (level.json)", "ESC — Выход"]):
+                    (WIDTH // 2 - 40, 148))
+        for i, t in enumerate(["E — Редактор уровней", "P — Играть (level.json)",
+                               "I — Справочник", "ESC — Выход"]):
             r = font.render(t, True, TEXT_C)
-            screen.blit(r, r.get_rect(center=(WIDTH // 2, 240 + i * 40)))
+            screen.blit(r, r.get_rect(center=(WIDTH // 2, 220 + i * 38)))
+        screen.blit(tiny_font.render(f"by {AUTHOR}  ·  {TIKTOK}  ·  нейросеть {MADE_WITH}",
+                                     True, (150, 150, 165)),
+                    (WIDTH // 2 - 220, 388))
         name, col = SKINS[skin_index]
-        screen.blit(font.render("Скин (A / D):", True, TEXT_C), (WIDTH // 2 - 210, 420))
-        pygame.draw.rect(screen, col, (WIDTH // 2 - 20, 412, 40, 40), border_radius=6)
-        screen.blit(font.render(name, True, col), (WIDTH // 2 + 40, 420))
+        screen.blit(font.render("Скин (A / D):", True, TEXT_C), (WIDTH // 2 - 210, 430))
+        pygame.draw.rect(screen, col, (WIDTH // 2 - 20, 422, 40, 40), border_radius=6)
+        screen.blit(font.render(name, True, col), (WIDTH // 2 + 40, 430))
         pygame.display.flip()
 
 
@@ -1031,6 +1116,8 @@ def main():
             state = editor()
         elif state == "play":
             state = play()
+        elif state == "help":
+            state = help_screen()
         else:
             break
     pygame.quit()
