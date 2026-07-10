@@ -1245,10 +1245,16 @@ def editor():
                     obj["rot"] = cur_rot["spike"]
                 if kind == "slope":
                     obj["rot"] = cur_rot["slope"]
-                if kind in P_COL:
+                if kind in P_COL or kind in XPORTAL_COL:
                     obj["rot"] = cur_rot["portal"]
                 if kind == "mtrig":
                     obj.update({"dx": 0, "dy": -3, "dur": 30, "easing": "smooth"})
+                if kind == "atrig":
+                    obj.update({"dur": 30, "op": 0})
+                if kind == "orb":
+                    obj["kind"] = ORB_TYPES[cur_orb]
+                if kind == "saw":
+                    obj["size"] = cur_saw
                 level.append(obj)
         if mb[2] and not over_pal:
             level[:] = [o for o in level if not (o["x"] == gx and o["y"] == gy)]
@@ -1267,14 +1273,23 @@ def editor():
         if kind is not None and not over_pal:
             prot = brush_rot(kind) or "up"
             preview = {"x": gx, "y": gy, "t": kind, "c": cur_color, "grp": cur_group,
-                       "lvl": cur_speed, "mode": cur_start_mode, "rot": prot}
+                       "lvl": cur_speed, "mode": cur_start_mode, "rot": prot,
+                       "kind": ORB_TYPES[cur_orb], "size": cur_saw}
             draw_object(screen, preview, cam_x, editor_mode=True)
             pygame.draw.rect(screen, (255, 255, 0), (gx * GRID - cam_x, gy * GRID, GRID, GRID), 2)
 
-        screen.blit(small_font.render(f"{TITLE}   {VERSION}   —   РЕДАКТОР", True, TEXT_C), (10, 8))
+        screen.blit(small_font.render(
+            f"{TITLE}   {VERSION}   —   РЕДАКТОР   —   Уровень {cur_slot}", True, TEXT_C), (10, 8))
         screen.blit(tiny_font.render(
-            "ЛКМ ставить · ПКМ удалять · A/D камера · E настройки · R поворот · U музыка · S сохр · L загр · C стереть · P играть · ESC",
+            "ЛКМ ставить · ПКМ удалять · A/D камера · E настройки · R поворот · N настройки уровня · U музыка · S сохр · L загр · C стереть · P играть · ESC",
             True, (170, 170, 185)), (10, 28))
+        # счётчик объектов
+        cnt = tiny_font.render(f"Объектов: {len(level)}", True, (255, 220, 120))
+        screen.blit(cnt, (WIDTH - cnt.get_width() - 12, 8))
+        mode_txt = tiny_font.render(
+            f"Старт: {CYCLE_RU.get(LEVEL_META['mode'], LEVEL_META['mode'])} x{SPEED_LEVELS[LEVEL_META['lvl']]['mult']} (N)",
+            True, (150, 200, 255))
+        screen.blit(mode_txt, (WIDTH - mode_txt.get_width() - 12, 26))
         draw_palette(bi)
 
         if kind is None:
@@ -1302,6 +1317,25 @@ def editor():
                 pills.append(("Режим (m)", CYCLE_RU.get(cur_start_mode, cur_start_mode), (120, 200, 255)))
                 pills.append(("Скорость , .", "x" + str(SPEED_LEVELS[cur_speed]["mult"]),
                               SPEED_LEVELS[cur_speed]["col"]))
+            if kind == "orb":
+                ok = ORB_TYPES[cur_orb]
+                pills.append(("Сфера (колесо)", ORB_RU[ok], ORB_COL[ok]))
+                pills.append(("Группа - =", str(cur_group), (240, 110, 200)))
+            if kind == "saw":
+                pills.append(("Размер (колесо)", "Большая" if cur_saw == "big" else "Маленькая", (255, 150, 90)))
+                pills.append(("Цвет [ ]", COLOR_GROUPS[cur_color][0],
+                              COLOR_GROUPS[cur_color][1] or (200, 200, 210)))
+                pills.append(("Группа - =", str(cur_group), (240, 110, 200)))
+            if kind == "atrig":
+                pills.append(("Группа - = колесо", str(cur_group), (240, 110, 200)))
+                pills.append(("Настрой", "жми E на нём", (255, 220, 120)))
+            if kind in XPORTAL_COL:
+                pills.append(("Ориентация (R)", CYCLE_RU.get(brush_rot(kind), ""), (255, 220, 120)))
+                pills.append(("Группа - =", str(cur_group), (240, 110, 200)))
+            if kind in ("deco1", "deco2"):
+                pills.append(("Цвет [ ]", COLOR_GROUPS[cur_color][0],
+                              COLOR_GROUPS[cur_color][1] or (200, 200, 210)))
+                pills.append(("Группа - =", str(cur_group), (240, 110, 200)))
             px = 10
             for lab, val, acc in pills:
                 px += draw_pill(px, HEIGHT - 50, lab, val, acc) + 8
@@ -1322,7 +1356,6 @@ def play():
     hcells = set((o["x"], o["y"]) for o in level if o["t"] == "hbox")
 
     snd("play")
-    set_music(level_music_path())
 
     ship_surf = pygame.Surface((size + 14, size), pygame.SRCALPHA)
     pygame.draw.rect(ship_surf, color, (0, 0, size, size), border_radius=8)
@@ -1344,8 +1377,8 @@ def play():
         else:
             st["cam_x"] = 0.0
             st["py"] = float(HEIGHT - 5 * GRID)
-            st["mode"] = "cube"
-            st["mult"] = 1.0
+            st["mode"] = LEVEL_META.get("mode", "cube")
+            st["mult"] = SPEED_LEVELS[LEVEL_META.get("lvl", 1)]["mult"]
         st["vy"] = 0.0
         st["dead"] = False
         st["won"] = False
@@ -1359,7 +1392,16 @@ def play():
         st["trail"] = []
         st["explode"] = []
         st["death_timer"] = 0
+        st["grav"] = 1        # 1 = обычная, -1 = перевёрнутая
+        st["mini"] = False    # мини-размер
+        st["alphas"] = {}     # группа -> непрозрачность 0..255
+        st["aanims"] = []     # анимации Alpha-триггеров
+        # музыка уровня — заново с начала
+        restart_level_music()
     reset()
+
+    def psize():
+        return max(8, int(size * MINI_SCALE)) if st["mini"] else size
 
     def spawn_explosion():
         cx = px + size / 2
@@ -1405,20 +1447,23 @@ def play():
             was_dead, was_won, prev_mode = st["dead"], st["won"], st["mode"]
             cur_speed = SPEED * st["mult"]
             st["cam_x"] += cur_speed
+            g = st["grav"]
+            size_now = psize()
 
             mode = st["mode"]
             vy = st["vy"]
             if mode == "cube":
-                vy += GRAVITY
+                vy += GRAVITY * g
             elif mode == "ship":
-                vy += (-SHIP_LIFT if hold else 0) + SHIP_GRAV
+                vy += ((-SHIP_LIFT if hold else 0) + SHIP_GRAV) * g
                 vy = max(-SHIP_MAX_V, min(SHIP_MAX_V, vy))
             elif mode == "wave":
-                vy = -cur_speed if hold else cur_speed
+                wspd = cur_speed * (0.75 if st["mini"] else 1.0)
+                vy = (-wspd if hold else wspd) * g
             elif mode == "ufo":
-                vy += UFO_GRAV
+                vy += UFO_GRAV * g
                 if flap:
-                    vy = UFO_FLAP
+                    vy = UFO_FLAP * g
                     snd("flap")
                 vy = max(-13, min(14, vy))
             py = st["py"] + vy
@@ -1433,12 +1478,38 @@ def play():
                     offsets[a["id"]] = [a["ex"], a["ey"]]
                     st["anims"].remove(a)
 
+            # анимации Alpha-триггеров
+            for a in st["aanims"][:]:
+                a["f"] += 1
+                p = ease(a["f"] / max(1, a["dur"]), "smooth")
+                st["alphas"][a["grp"]] = a["s"] + (a["e"] - a["s"]) * p
+                if a["f"] >= a["dur"]:
+                    st["alphas"][a["grp"]] = a["e"]
+                    st["aanims"].remove(a)
+
             world_x = px + st["cam_x"]
-            pr = pygame.Rect(world_x, py, size, size)
-            prev_bottom = st["py"] + size
+            pr = pygame.Rect(world_x, py, size_now, size_now)
+            prev_bottom = st["py"] + size_now
             prev_top = st["py"]
-            was_falling = vy > 0
+            # "падение" — движение по направлению гравитации
+            was_falling = vy * g > 0
             TOL = 6
+
+            def can_land(r):
+                if g == 1:
+                    return was_falling and prev_bottom <= r.top + TOL
+                return was_falling and prev_top >= r.bottom - TOL
+
+            def can_bump(r):
+                if g == 1:
+                    return (not was_falling) and prev_top >= r.bottom - TOL
+                return (not was_falling) and prev_bottom <= r.top + TOL
+
+            def land_y(r):
+                return r.top - size_now if g == 1 else r.bottom
+
+            def bump_y(r):
+                return r.bottom if g == 1 else r.top - size_now
 
             st["on_ground"] = False
             st["ground_slope"] = None
@@ -1447,15 +1518,78 @@ def play():
                 ooff = offsets.get(id(o), (0, 0))
                 if t in P_COL:
                     if pr.colliderect(portal_rect(o, ooff)):
+                        if P_MODE[t] == "ship" and mode != "ship":
+                            # смягчение входа в портал корабля
+                            vy = max(-SHIP_ENTER_CLAMP, min(SHIP_ENTER_CLAMP, vy))
                         mode = P_MODE[t]; st["mode"] = mode
+                    continue
+                if t in XPORTAL_COL:
+                    if pr.colliderect(portal_rect(o, ooff)):
+                        if t == "p_gup" and st["grav"] != -1:
+                            st["grav"] = -1; g = -1; snd("portal")
+                        elif t == "p_gdn" and st["grav"] != 1:
+                            st["grav"] = 1; g = 1; snd("portal")
+                        elif t == "p_mini" and not st["mini"]:
+                            st["mini"] = True; snd("portal")
+                            size_now = psize()
+                            pr.w = pr.h = size_now
+                        elif t == "p_big" and st["mini"]:
+                            st["mini"] = False; snd("portal")
+                            size_now = psize()
+                            pr.w = pr.h = size_now
                     continue
                 if t == "speed":
                     if pr.colliderect(portal_rect(o, ooff)):
                         st["mult"] = SPEED_LEVELS[o.get("lvl", 1)]["mult"]
                     continue
+                if t == "orb":
+                    orect = pygame.Rect(o["x"] * GRID + ooff[0] - 8, o["y"] * GRID + ooff[1] - 8,
+                                        GRID + 16, GRID + 16)
+                    if flap and pr.colliderect(orect) and id(o) not in st["fired"]:
+                        st["fired"].add(id(o))
+                        k = o.get("kind", "yellow")
+                        if k == "yellow":
+                            vy = JUMP_FORCE * g
+                        elif k == "pink":
+                            vy = JUMP_FORCE * 0.72 * g
+                        elif k == "red":
+                            vy = JUMP_FORCE * 1.35 * g
+                        elif k == "cyan":
+                            st["grav"] = -st["grav"]; g = st["grav"]
+                            vy = 5 * g
+                        elif k == "green":
+                            st["grav"] = -st["grav"]; g = st["grav"]
+                            vy = JUMP_FORCE * g
+                        elif k == "black":
+                            vy = -JUMP_FORCE * 1.3 * g
+                        st["spin"] = -12.0
+                        snd("jump")
+                    continue
+                if t == "saw":
+                    scx, scy = saw_center(o, ooff)
+                    scx -= 0  # мировые координаты
+                    r_ = saw_radius(o) * 0.85
+                    nx = max(pr.left, min(scx, pr.right))
+                    ny = max(pr.top, min(scy, pr.bottom))
+                    if (nx - scx) ** 2 + (ny - scy) ** 2 < r_ * r_:
+                        st["dead"] = True
+                    continue
+                if t == "atrig":
+                    line_x = o["x"] * GRID + GRID // 2
+                    if world_x + size_now / 2 >= line_x and id(o) not in st["fired"]:
+                        st["fired"].add(id(o))
+                        grp = o.get("grp", 0)
+                        if grp:
+                            cur = st["alphas"].get(grp, 255)
+                            tgt_a = int(o.get("op", 0) * 255 / 100)
+                            st["aanims"] = [a for a in st["aanims"] if a["grp"] != grp]
+                            st["aanims"].append({"grp": grp, "f": 0,
+                                                 "dur": max(1, o.get("dur", 30)),
+                                                 "s": cur, "e": tgt_a})
+                    continue
                 if t == "mtrig":
                     line_x = o["x"] * GRID + GRID // 2
-                    if world_x + size / 2 >= line_x and id(o) not in st["fired"]:
+                    if world_x + size_now / 2 >= line_x and id(o) not in st["fired"]:
                         st["fired"].add(id(o))
                         grp = o.get("grp", 0)
                         if grp:
@@ -1471,31 +1605,47 @@ def play():
                     continue
                 if t == "slope":
                     d = o.get("rot", "right")
+                    left = o["x"] * GRID + ooff[0]
+                    top = o["y"] * GRID + ooff[1]
+                    bottom = top + GRID
+                    cxp = world_x + size_now / 2
+                    lx = cxp - left
                     if d in ("right", "left"):
-                        left = o["x"] * GRID + ooff[0]
-                        bottom = (o["y"] + 1) * GRID + ooff[1]
-                        cxp = world_x + size / 2
-                        lx = cxp - left
-                        if 0 <= lx <= GRID and mode in ("cube", "ship", "ufo"):
-                            surf_y = bottom - lx if d == "right" else bottom - (GRID - lx)
-                            if py + size > surf_y and prev_bottom <= bottom + GRID:
-                                py = surf_y - size; vy = 0
-                                st["on_ground"] = True
-                                st["ground_slope"] = d
-                                pr.y = int(py)
-                    else:
-                        r = rect_of(o, ooff)
-                        if pr.colliderect(r):
+                        # поверхность пола-склона в точке центра игрока
+                        if 0 <= lx <= GRID:
+                            surf_y = bottom - lx if d == "right" else top + lx
                             if mode == "wave":
-                                st["dead"] = True
-                            elif was_falling and prev_bottom <= r.top + TOL:
-                                py = r.top - size; vy = 0; st["on_ground"] = True; pr.y = int(py)
-                            elif (not was_falling) and prev_top >= r.bottom - TOL:
-                                py = r.bottom; vy = 0; pr.y = int(py)
+                                # честный треугольный хитбокс для волны
+                                if py + size_now > surf_y + 2:
+                                    st["dead"] = True
+                            elif g == 1:
+                                if py + size_now > surf_y and prev_bottom <= bottom + GRID:
+                                    py = surf_y - size_now; vy = 0
+                                    st["on_ground"] = True
+                                    st["ground_slope"] = d
+                                    pr.y = int(py)
                             else:
-                                st["dead"] = True
+                                # перевёрнутая гравитация: склон-пол сплошной снизу не трогаем
+                                if py + size_now > surf_y + 2:
+                                    st["dead"] = True
+                    else:
+                        # потолочные склоны: треугольник сверху
+                        if 0 <= lx <= GRID:
+                            surf_y = top + lx if d == "tright" else bottom - lx
+                            if mode == "wave":
+                                if py < surf_y - 2:
+                                    st["dead"] = True
+                            elif g == -1:
+                                if py < surf_y and prev_top >= top - GRID:
+                                    py = surf_y; vy = 0
+                                    st["on_ground"] = True
+                                    st["ground_slope"] = d
+                                    pr.y = int(py)
+                            else:
+                                if py < surf_y - 2:
+                                    st["dead"] = True
                     continue
-                if t in ("startpos", "hbox"):
+                if t in ("startpos", "hbox", "deco1", "deco2"):
                     continue
 
                 r = rect_of(o, ooff)
@@ -1508,44 +1658,49 @@ def play():
                     st["won"] = True
                 else:
                     if mode == "wave":
-                        if (o["x"], o["y"]) in hcells and was_falling and prev_bottom <= r.top + TOL:
-                            py = r.top - size; vy = 0
+                        if (o["x"], o["y"]) in hcells and can_land(r):
+                            py = land_y(r); vy = 0
                             st["on_ground"] = True; pr.y = int(py)
                         else:
                             st["dead"] = True
                     elif mode == "ship":
-                        if prev_bottom <= r.top + TOL:
-                            py = r.top - size; vy = 0
+                        if can_land(r) or (g == 1 and prev_bottom <= r.top + TOL) \
+                                or (g == -1 and prev_top >= r.bottom - TOL):
+                            py = land_y(r); vy = 0
                             st["on_ground"] = True; pr.y = int(py)
-                        elif prev_top >= r.bottom - TOL:
-                            py = r.bottom; vy = 0; pr.y = int(py)
+                        elif can_bump(r) or (g == 1 and prev_top >= r.bottom - TOL) \
+                                or (g == -1 and prev_bottom <= r.top + TOL):
+                            py = bump_y(r); vy = 0; pr.y = int(py)
                         else:
                             st["dead"] = True
                     else:
-                        if was_falling and prev_bottom <= r.top + TOL:
-                            py = r.top - size; vy = 0
+                        if can_land(r):
+                            py = land_y(r); vy = 0
                             st["on_ground"] = True; pr.y = int(py)
-                        elif (not was_falling) and prev_top >= r.bottom - TOL:
-                            py = r.bottom; vy = 0; pr.y = int(py)
+                        elif can_bump(r):
+                            py = bump_y(r); vy = 0; pr.y = int(py)
                         else:
                             ov = min(pr.right, r.right) - max(pr.left, r.left)
                             if ov > 6:
                                 st["dead"] = True
                             else:
-                                py = r.top - size; vy = 0
+                                py = land_y(r); vy = 0
                                 st["on_ground"] = True; pr.y = int(py)
 
             floor = HEIGHT - GRID
-            if py + size >= floor:
-                py = floor - size; vy = 0
-                st["on_ground"] = True
+            if py + size_now >= floor:
+                py = floor - size_now; vy = 0
+                if g == 1:
+                    st["on_ground"] = True
             if py < 0:
                 py = 0
                 if vy < 0:
                     vy = 0
+                if g == -1:
+                    st["on_ground"] = True
 
             if mode == "cube" and hold and st["on_ground"]:
-                vy = JUMP_FORCE
+                vy = JUMP_FORCE * g
                 st["spin"] = -12.0
                 snd("jump")
 
@@ -1567,6 +1722,7 @@ def play():
             if st["mode"] != prev_mode:
                 snd("portal")
             if st["dead"] and not was_dead:
+                stop_music()  # музыка замолкает при смерти
                 snd("death")
                 spawn_explosion()
                 st["death_timer"] = DEATH_FRAMES
@@ -1581,40 +1737,57 @@ def play():
         pygame.draw.rect(screen, (50, 50, 65), (0, HEIGHT - GRID, WIDTH, GRID))
 
         for o in level:
-            draw_object(screen, o, st["cam_x"], editor_mode=False, off=st["offsets"].get(id(o), (0, 0)))
+            grp = o.get("grp", 0)
+            a = int(st["alphas"].get(grp, 255)) if grp else 255
+            draw_object(screen, o, st["cam_x"], editor_mode=False,
+                        off=st["offsets"].get(id(o), (0, 0)), alpha=a)
 
+        s_now = psize()
         # след (полупрозрачная аура)
         for tp in st["trail"]:
             a = int(70 * tp[2] / TRAIL_LIFE)
-            s_ = pygame.Surface((size, size), pygame.SRCALPHA)
+            s_ = pygame.Surface((s_now, s_now), pygame.SRCALPHA)
             s_.fill((color[0], color[1], color[2], a))
             screen.blit(s_, (tp[0], tp[1]))
 
         py = st["py"]; vy = st["vy"]; mode = st["mode"]
+        gd = st["grav"]
         if not st["dead"]:
+            csurf = cube_surf
+            ssurf = ship_surf
+            if st["mini"]:
+                csurf = pygame.transform.smoothscale(cube_surf, (s_now, s_now))
+                ssurf = pygame.transform.smoothscale(
+                    ship_surf, (int((size + 14) * MINI_SCALE), s_now))
+            if gd == -1:
+                csurf = pygame.transform.flip(csurf, False, True)
+                ssurf = pygame.transform.flip(ssurf, False, True)
             if mode == "cube":
                 ang = st["cube_rot"]
                 if st["ground_slope"]:
                     ang += (-45 if st["ground_slope"] == "right" else 45)
                 if abs(ang) < 0.5:
-                    screen.blit(cube_surf, (px, py))
+                    screen.blit(csurf, (px, py))
                 else:
-                    rot = pygame.transform.rotate(cube_surf, ang)
-                    screen.blit(rot, rot.get_rect(center=(px + size // 2, py + size // 2)))
+                    rot = pygame.transform.rotate(csurf, ang)
+                    screen.blit(rot, rot.get_rect(center=(px + s_now // 2, py + s_now // 2)))
             elif mode == "ship":
                 angle = max(-32, min(32, -vy * 3))
-                rot = pygame.transform.rotate(ship_surf, angle)
-                screen.blit(rot, rot.get_rect(center=(px + size // 2, py + size // 2)))
+                rot = pygame.transform.rotate(ssurf, angle)
+                screen.blit(rot, rot.get_rect(center=(px + s_now // 2, py + s_now // 2)))
             elif mode == "wave":
                 if vy < 0:
-                    pts = [(px + size, py), (px, py + size * 0.55), (px + size * 0.55, py + size)]
+                    pts = [(px + s_now, py), (px, py + s_now * 0.55), (px + s_now * 0.55, py + s_now)]
                 else:
-                    pts = [(px + size, py + size), (px, py + size * 0.45), (px + size * 0.55, py)]
+                    pts = [(px + s_now, py + s_now), (px, py + s_now * 0.45), (px + s_now * 0.55, py)]
                 pygame.draw.polygon(screen, color, pts)
             elif mode == "ufo":
-                body = pygame.Rect(px - 6, py + size * 0.4, size + 12, size * 0.45)
+                body = pygame.Rect(px - 6, py + s_now * 0.4, s_now + 12, s_now * 0.45)
                 pygame.draw.ellipse(screen, color, body)
-                dome = pygame.Rect(px + size * 0.2, py + size * 0.02, size * 0.6, size * 0.55)
+                if gd == 1:
+                    dome = pygame.Rect(px + s_now * 0.2, py + s_now * 0.02, s_now * 0.6, s_now * 0.55)
+                else:
+                    dome = pygame.Rect(px + s_now * 0.2, py + s_now * 0.43, s_now * 0.6, s_now * 0.55)
                 pygame.draw.ellipse(screen, (255, 255, 255), dome)
                 pygame.draw.ellipse(screen, color, dome, 2)
 
@@ -1627,7 +1800,12 @@ def play():
             screen.blit(ps, (p[0] - rad, p[1] - rad))
 
         mode_ru = {"cube": "КУБ", "ship": "КОРАБЛИК", "wave": "ВОЛНА", "ufo": "НЛО"}[mode]
-        screen.blit(font.render(f"Режим: {mode_ru}   x{st['mult']}", True, TEXT_C), (10, 10))
+        extra = ""
+        if st["mini"]:
+            extra += "   МИНИ"
+        if st["grav"] == -1:
+            extra += "   ГРАВ ВВЕРХ"
+        screen.blit(font.render(f"Режим: {mode_ru}   x{st['mult']}{extra}", True, TEXT_C), (10, 10))
         screen.blit(small_font.render("Действие · R заново · E редактор · ESC меню", True, TEXT_C), (10, 40))
 
         if st["won"]:
@@ -1719,13 +1897,13 @@ def help_screen():
         screen.blit(small_font.render("Блоки редактора:", True, TEXT_C), (60, yy + 16))
 
         start_y = yy + 44
-        col_x = [70, 540]
-        per_col = (len(PALETTE) + 1) // 2
+        col_x = [60, 380, 700]
+        per_col = (len(PALETTE) + 2) // 3
         for idx, (k, lab) in enumerate(PALETTE):
             col = idx // per_col
             row = idx % per_col
-            ix = col_x[col]
-            iy = start_y + row * 46
+            ix = col_x[min(col, 2)]
+            iy = start_y + row * 42
             r = pygame.Rect(ix, iy, TILE, TILE)
             pygame.draw.rect(screen, (44, 44, 58), r, border_radius=7)
             draw_palette_icon(screen, k, r)
@@ -1735,6 +1913,145 @@ def help_screen():
 
         screen.blit(tiny_font.render("ESC / I / Enter — назад в меню", True, (160, 160, 175)),
                     (60, HEIGHT - 30))
+        pygame.display.flip()
+
+
+# ---------------- Выбор уровня (5 слотов) ----------------
+def levels_screen():
+    global cur_slot
+    sel = cur_slot - 1
+    while True:
+        clock.tick(FPS)
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                return "quit"
+            if e.type == pygame.KEYDOWN:
+                if e.key == pygame.K_ESCAPE:
+                    return "menu"
+                if e.key in (pygame.K_w, pygame.K_UP):
+                    sel = (sel - 1) % LEVEL_SLOTS
+                if e.key in (pygame.K_s, pygame.K_DOWN):
+                    sel = (sel + 1) % LEVEL_SLOTS
+                if pygame.K_1 <= e.key <= pygame.K_5:
+                    sel = e.key - pygame.K_1
+                if e.key in (pygame.K_RETURN, pygame.K_p):
+                    cur_slot = sel + 1
+                    save_config()
+                    load_level()
+                    return "play"
+                if e.key == pygame.K_e:
+                    cur_slot = sel + 1
+                    save_config()
+                    load_level()
+                    return "editor"
+
+        screen.fill(BG)
+        title = big_font.render("МОИ УРОВНИ", True, SKINS[skin_index][1])
+        screen.blit(title, title.get_rect(center=(WIDTH // 2, 70)))
+        for i in range(LEVEL_SLOTS):
+            yy = 140 + i * 62
+            r = pygame.Rect(WIDTH // 2 - 280, yy, 560, 50)
+            pygame.draw.rect(screen, (44, 44, 58), r, border_radius=8)
+            if i == sel:
+                pygame.draw.rect(screen, SEL_C, r, 3, border_radius=8)
+            else:
+                pygame.draw.rect(screen, (72, 72, 92), r, 1, border_radius=8)
+            n = slot_object_count(i + 1)
+            info = "пусто" if n is None else f"{n} объектов"
+            col = (150, 150, 165) if n is None else (150, 230, 160)
+            screen.blit(font.render(f"Уровень {i + 1}", True, TEXT_C), (r.x + 18, r.y + 13))
+            screen.blit(font.render(info, True, col), (r.right - 220, r.y + 13))
+        screen.blit(tiny_font.render(
+            "W/S или 1-5 выбрать · Enter/P — играть · E — редактор · ESC назад",
+            True, (160, 160, 175)), (WIDTH // 2 - 260, HEIGHT - 50))
+        pygame.display.flip()
+
+
+# ---------------- Аккаунт ----------------
+def account_screen():
+    fields = ["username", "password"]
+    labels = {"username": "Имя (3-20 символов)", "password": "Пароль (мин. 6)"}
+    vals = {"username": "", "password": ""}
+    sel = 0
+    msg = ""
+    msg_col = (160, 160, 175)
+    busy = False
+    while True:
+        clock.tick(FPS)
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                return "quit"
+            if e.type == pygame.KEYDOWN and not busy:
+                if e.key == pygame.K_ESCAPE:
+                    return "menu"
+                if ACCOUNT["token"]:
+                    if e.key == pygame.K_BACKSPACE:
+                        ACCOUNT["username"] = None
+                        ACCOUNT["token"] = None
+                        save_config()
+                        msg = "Вы вышли из аккаунта"
+                        msg_col = (255, 220, 120)
+                    continue
+                if e.key == pygame.K_TAB or e.key == pygame.K_DOWN or e.key == pygame.K_UP:
+                    sel = (sel + 1) % 2
+                elif e.key == pygame.K_BACKSPACE:
+                    vals[fields[sel]] = vals[fields[sel]][:-1]
+                elif e.key in (pygame.K_RETURN, pygame.K_F1, pygame.K_F2):
+                    action = "login" if e.key == pygame.K_F2 else "register"
+                    if e.key == pygame.K_RETURN:
+                        action = "register"
+                    u, p = vals["username"].strip(), vals["password"]
+                    if len(u) < 3:
+                        msg, msg_col = "Имя слишком короткое", (250, 120, 120)
+                    elif len(p) < 6:
+                        msg, msg_col = "Пароль минимум 6 символов", (250, 120, 120)
+                    else:
+                        busy = True
+                        msg, msg_col = "Подключение к серверу...", (150, 200, 255)
+                        pygame.display.flip()
+                        ok, data = api_request(f"/api/{action}",
+                                               {"username": u, "password": p})
+                        busy = False
+                        if ok:
+                            ACCOUNT["username"] = data.get("username", u)
+                            ACCOUNT["token"] = data.get("token")
+                            save_config()
+                            msg, msg_col = "Успешно! Добро пожаловать, " + ACCOUNT["username"], (150, 230, 160)
+                        else:
+                            msg, msg_col = str(data), (250, 120, 120)
+                else:
+                    ch = e.unicode
+                    if ch and ch.isprintable() and len(vals[fields[sel]]) < 24:
+                        vals[fields[sel]] += ch
+
+        screen.fill(BG)
+        title = big_font.render("АККАУНТ", True, SKINS[skin_index][1])
+        screen.blit(title, title.get_rect(center=(WIDTH // 2, 70)))
+
+        if ACCOUNT["token"]:
+            t1 = font.render(f"Вы вошли как: {ACCOUNT['username']}", True, (150, 230, 160))
+            screen.blit(t1, t1.get_rect(center=(WIDTH // 2, 200)))
+            t2 = small_font.render("Backspace — выйти из аккаунта · ESC назад", True, (160, 160, 175))
+            screen.blit(t2, t2.get_rect(center=(WIDTH // 2, 250)))
+        else:
+            for i, fkey in enumerate(fields):
+                yy = 160 + i * 70
+                r = pygame.Rect(WIDTH // 2 - 260, yy, 520, 46)
+                pygame.draw.rect(screen, (44, 44, 58), r, border_radius=8)
+                pygame.draw.rect(screen, SEL_C if i == sel else (72, 72, 92), r,
+                                 3 if i == sel else 1, border_radius=8)
+                shown = vals[fkey] if fkey == "username" else "*" * len(vals[fkey])
+                if i == sel:
+                    shown += "|"
+                screen.blit(small_font.render(labels[fkey], True, (160, 160, 175)), (r.x, r.y - 20))
+                screen.blit(font.render(shown, True, TEXT_C), (r.x + 14, r.y + 11))
+            hint = small_font.render(
+                "Tab — поле · Enter/F1 — регистрация · F2 — вход · ESC назад",
+                True, (160, 160, 175))
+            screen.blit(hint, hint.get_rect(center=(WIDTH // 2, 330)))
+        if msg:
+            m = small_font.render(msg, True, msg_col)
+            screen.blit(m, m.get_rect(center=(WIDTH // 2, HEIGHT - 70)))
         pygame.display.flip()
 
 
@@ -1748,9 +2065,12 @@ def menu():
             if e.type == pygame.QUIT:
                 return "quit"
             if e.type == pygame.KEYDOWN:
-                if e.key == pygame.K_e: return "editor"
+                if e.key == pygame.K_e:
+                    load_level(); return "editor"
                 if e.key == pygame.K_p:
                     load_level(); return "play"
+                if e.key == pygame.K_l: return "levels"
+                if e.key == pygame.K_u: return "account"
                 if e.key == pygame.K_i: return "help"
                 if e.key == pygame.K_k: return "controls"
                 if e.key == pygame.K_a:
@@ -1768,14 +2088,16 @@ def menu():
         screen.blit(title, title.get_rect(center=(WIDTH // 2, 100)))
         screen.blit(small_font.render(VERSION + ("  ♪" if sound_ok else "  (без звука)"), True, TEXT_C),
                     (WIDTH // 2 - 40, 138))
-        for i, t in enumerate(["E — Редактор уровней", "P — Играть (level.json)",
+        acc_line = ("U — Аккаунт: " + ACCOUNT["username"]) if ACCOUNT["token"] else "U — Аккаунт (вход/регистрация)"
+        for i, t in enumerate(["E — Редактор уровней", f"P — Играть (уровень {cur_slot})",
+                               "L — Мои уровни (5 слотов)", acc_line,
                                "I — Справочник", "K — Управление", "ESC — Выход"]):
             r = font.render(t, True, TEXT_C)
-            screen.blit(r, r.get_rect(center=(WIDTH // 2, 200 + i * 36)))
+            screen.blit(r, r.get_rect(center=(WIDTH // 2, 190 + i * 34)))
         name, col = SKINS[skin_index]
-        screen.blit(font.render("Скин (A / D):", True, TEXT_C), (WIDTH // 2 - 210, 430))
-        pygame.draw.rect(screen, col, (WIDTH // 2 - 20, 422, 40, 40), border_radius=6)
-        screen.blit(font.render(name, True, col), (WIDTH // 2 + 40, 430))
+        screen.blit(font.render("Скин (A / D):", True, TEXT_C), (WIDTH // 2 - 210, 440))
+        pygame.draw.rect(screen, col, (WIDTH // 2 - 20, 432, 40, 40), border_radius=6)
+        screen.blit(font.render(name, True, col), (WIDTH // 2 + 40, 440))
         pygame.display.flip()
 
 
@@ -1795,6 +2117,10 @@ def main():
             state = help_screen()
         elif state == "controls":
             state = controls_screen()
+        elif state == "levels":
+            state = levels_screen()
+        elif state == "account":
+            state = account_screen()
         else:
             break
     pygame.quit()
